@@ -10,8 +10,10 @@ class Wall(pg.sprite.Sprite):
         self.game = game
 
         self.image = pg.Surface((TILESIZE,TILESIZE))
+        self.image.set_colorkey((1,1,1))
         self.rect = self.image.get_rect()
         self.image.fill((1,1,1))
+
 
         self.x = x
         self.y = y

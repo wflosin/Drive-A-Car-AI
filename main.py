@@ -1,30 +1,53 @@
+# Drive A Car
+# version: 0.0.1
+#
+# William Losin
+# 2019-11-23
+# github.com/wflosin
+
 import pygame as pg
 import numpy as np
 from options import *
-from sprites import player, cars, walls
+from sprites import player, walls
 import os,sys
-import time
+# import time
 
 class Game:
-    def __init__(self):
+    def __init__(self,display=1,ai_active=0):
+        #toggle settings
+        self.DISPLAY = display
+        self.TESTING = 0
+        self.GRID = 0
+        self.RAYS = 1
+        self.NOCLIP = 0
+        self.SAVEDATA = 0
+        self.AI_ACTIVE = ai_active
+
         # initialize the game window
-        
+        # print('here')
         pg.init()
-        # pg.mixer.init()
-        
+
         self.screen = pg.display.set_mode((WIDTH, HEIGHT))
-        pg.display.set_caption(TITLE)
+
+        if self.DISPLAY:
+            pg.display.set_caption(TITLE)
+            self.gamefont = pg.font.SysFont('Eras', WIDTH//57)
+            self.screen.fill((WHITE))
 
         self.clock = pg.time.Clock()
         #send an event after 500 ms, then after every 100 ms
         # pg.key.set_repeat(500, 100)
         pg.key.set_repeat(1, 1)
 
-        self.gamefont = pg.font.SysFont('Eras', WIDTH//57)
-        self.screen.fill((WHITE))
+        self.AI_reward = 0
+        self.episode = 0
+
+        #The background image, which smooths out walls
+        self.background_image = pg.image.load(os.path.join('rules','bkgrd_map.png')).convert_alpha()
+
 
     def spawn_player(self):
-        self.player = player.Player(self,440,48,0)
+        self.player = player.Player(self,440,48,0,velocity=(3,0))
 
     def new(self):
         # initialize all the variables and do all the setup for the new game
@@ -40,6 +63,12 @@ class Game:
         #initialize the player
         self.spawn_player()
 
+        #move data
+        self.drive_data = []
+        self.time = 0
+
+        self.playing = 1
+
         #initialize the starting line
         self.starting_line = walls.Checkpoint(self,61,2,h=13,colour=(150,0,0),start=True)
 
@@ -49,7 +78,7 @@ class Game:
         # self.mouse = Sprite_Mouse_Location(game,0,0)
 
         #spawn the wall sprites and checkpoints
-        self.load_data()
+        self.load_map()
         for row, tiles in enumerate(self.map_data):
             for col, tile in enumerate(tiles):
                 if tile == 'X':
@@ -77,8 +106,20 @@ class Game:
                             break
                         col_count += 1  
 
-    def load_data(self):
+    def reset(self):
+        #initialize the player
+        self.spawn_player()
+
+        #move data
+        self.drive_data = []
+        self.time = 0
+
+        self.playing = 1
+        self.create_checkpoints()
+
+    def load_map(self):
         game_folder = os.path.dirname(__file__)
+        #open and load the map data
         with open(os.path.join(game_folder, 'rules','map.txt'), 'rt') as f:
             self.map_data = [line for line in f]
 
@@ -86,12 +127,34 @@ class Game:
         # game loop
         self.playing = True
         while self.playing:
-            self.dt = self.clock.tick(FPS) / 1000
+            self.run_once()
+
+    def run_once(self,action=None):
+        # self.dt = self.clock.tick(FPS) / 1000
+        self.dt = 0.024#0.11#0.006
+        # print(self.dt)
+        self.time += self.dt
+
+        #event loop 
+        if self.AI_ACTIVE:
+            self.event_drive_AI(action)
+        else:
             self.event_drive()
-            self.update()
-            self.draw()
+
+        self.move_player()
+        self.update()
+        if self.DISPLAY:
+            self.draw(action)
 
     def quit(self):
+        # pg.image.save(self.screen,'background.png')
+        print("quit")
+        if self.SAVEDATA:
+            with open('drive_data.csv','w') as f:
+                headers = 'time,-45 ray,0 ray,45 ray,wheel angle,velocity\n'
+                f.write(headers+str(self.drive_data).replace('[','').replace('],','\n').replace(']','').replace(', ',','))
+        self.playing = 0
+        
         pg.quit()
         sys.exit()
 
@@ -99,39 +162,69 @@ class Game:
         # update portion of the game loop
         self.all_sprites.update()
 
+        #updates the observables
+        self.drive_data = np.array(
+            # self.player.ray_length[0]/WIDTH, # 0 to 1; this assumes the ray will not
+            # self.player.ray_length[1]/WIDTH, # 0 to 1;  go further than the WIDTH of
+            # self.player.ray_length[2]/WIDTH, # 0 to 1;  the screen
+            # (self.player.wheel_angle+self.player.max_wheel_angle)/(2*self.player.max_wheel_angle), # 0 to 1
+            # np.linalg.norm(self.player.v)/300]) # 0 to 1; 300 being roughly the max speed
+            self.player.ray_length +
+            [self.player.wheel_angle+self.player.max_wheel_angle, #so that all the mins are 0 
+            np.linalg.norm(self.player.v)])
+
     def draw_grid(self):
         for x in range(0, WIDTH, TILESIZE):
             pg.draw.line(self.screen, LTGREY, (x,0), (x, HEIGHT))
         for y in range(0, HEIGHT, TILESIZE):
             pg.draw.line(self.screen, LTGREY, (0, y), (WIDTH, y))
 
-    def draw(self):
+    def draw(self,action=None):
         self.screen.fill(BKGRD)
-        if GRID:
+        self.screen.blit(self.background_image,(0,0))
+        if self.GRID:
             self.draw_grid()
         # self.all_sprites.draw(self.screen)
         self.walls.draw(self.screen)
         self.checkpoints.draw(self.screen)
         self.starting_lines.draw(self.screen)
-        self.players.draw(self.screen)
-
-
-        self.custom_message(str(self.player.points),(2,2),40)
+        
+        self.custom_message(str(self.player.points),(2,2),40,colour=WHITE)
 
         #traces the rays used so the car knows its own position (used for AI)
-        if RAYS:
+        if self.RAYS or self.AI_ACTIVE:
             self.draw_rays()
-        
-        if TESTING:
+        if self.AI_ACTIVE:
+            self.draw_AI_details(action)  
+        self.players.draw(self.screen)
+        if self.TESTING:
             self.debug()
-        pg.display.flip()
+        if self.DISPLAY:
+            pg.display.flip()
+
+    def draw_AI_details(self,action):
+        self.custom_message("reward: " + str(self.AI_reward),(460,500),15,colour=(255,0,0))
+        self.custom_message("action: %i"%(action),(460,520),15,colour=(255,0,0))
+        self.custom_message("Episode: %s"%(self.episode),(460,540),15,colour=(255,0,0))
 
     def draw_rays(self):
+        #requires that the walls are already drawn
+
+        if self.SAVEDATA:
+            #stores the data
+            self.drive_data.append( [self.time] +
+                                     self.player.ray_length +
+                                     [self.player.wheel_angle,
+                                     np.linalg.norm(self.player.v)] )
+        
+        #updates the ray information
         self.player.ray_trace()
+        
         #draws the rays that were traced
         for ray in self.player.ray_lines:
-            # print(ray[0], ray[1])
-            pg.draw.line(self.screen, (0,0,255), ray[0], ray[1] )
+            if ray:
+                # print(ray[0], ray[1])
+                pg.draw.line(self.screen, (0,0,255), ray[0], ray[1] )
 
     def debug(self):
         #draws the velocity vector from the center of the car
@@ -147,8 +240,82 @@ class Game:
         self.message("angle: "+str(self.player.angle),(100,160))
         self.message("wheel angle: "+str(self.player.wheel_angle),(100,176))
 
+    def move_player(self):
+        self.player.move(self.dt)
+
+        #checks if the player collides with a checkpoint
+        self.player.check_cross_checkpoint()
+
+        #if the player hits a wall
+        if not self.NOCLIP and self.player.collide_with_walls(self.walls):
+            if self.SAVEDATA:
+                self.quit()
+            
+            #resets the car
+            if not self.AI_ACTIVE:
+                #NOTE: the player is killed by the AI not here
+                self.player.kill()
+                self.create_checkpoints()
+                self.spawn_player()
+            else:
+                # self.quit()
+                self.playing = 0
+
+        # #if the player crosses the start/finish line
+        # if self.player.check_cross_starting_line() \
+        #         and (self.player.points % 22 == 0) \
+        #         and (self.player.points > (20*self.player.laps)):
+        #     self.player.laps += 1
+        #     self.create_checkpoints()
+        self.player.check_cross_starting_line()
+
+    def event_drive_AI(self,action):
+        # catches if the user closes the window
+        for event in pg.event.get():
+            if event.type == pg.QUIT:
+                self.quit()
+
+        #all the possible action the AI can take
+        # turn left or right
+        # accelerate or brake
+        if action in ['L',0]:
+            self.player.accel = 0
+            self.player.turn = 1
+            self.player.brake = 0
+        elif action in ['R',1]:
+            self.player.accel = 0
+            self.player.turn = -1
+            self.player.brake = 0
+        elif action in ['LB',2]:
+            self.player.accel = 0
+            self.player.turn = 1
+            self.player.brake = True
+        elif action in ['RB',3]:
+            self.player.accel = 0
+            self.player.turn = -1
+            self.player.brake = True
+        elif action in ['LA',4]:
+            self.player.accel = 1
+            self.player.turn = 1
+            self.player.brake = False
+        elif action in ['RA',5]:
+            self.player.accel = 1
+            self.player.turn = -1
+            self.player.brake = False
+        elif action in ['B',6]:
+            self.player.accel = 0
+            self.player.turn = 0
+            self.player.brake = True
+        elif action in ['A',7]:
+            self.player.accel = 1
+            self.player.turn = 0
+            self.player.brake = False            
+        else:
+            self.player.accel = 0
+            self.player.turn = 0
+            self.player.brake = 0
+
     def event_drive(self):
-        global TESTING,GRID,RAYS,NOCLIP
         # catches and handles all events
         for event in pg.event.get():
             if event.type == pg.QUIT:
@@ -188,15 +355,15 @@ class Game:
                 if event.key == pg.K_SPACE:
                     self.player.brake = False                
                 if event.key == pg.K_d:
-                    TESTING = 1 - TESTING
+                    self.TESTING = 1 - self.TESTING
                 if event.key == pg.K_g:
-                    GRID = 1 - GRID
+                    self.GRID = 1 - self.GRID
                 if event.key == pg.K_r:
-                    RAYS = 1 - RAYS   
+                    self.RAYS = 1 - self.RAYS   
                 if event.key == pg.K_n:
-                    NOCLIP = 1 - NOCLIP
+                    self.NOCLIP = 1 - self.NOCLIP
                     if RAYS:
-                        RAYS = 0         
+                        self.RAYS = 0         
             
             # #draw walls
             # if event.type == pg.MOUSEBUTTONUP:
@@ -211,23 +378,6 @@ class Game:
             #         collide = pg.sprite.collide_rect(wall,self.mouse)
             #     if not collide:
             #         walls.Wall(self, x, y)
-
-
-        self.player.move(self.dt)
-
-        #checks if the player collides with a checkpoint
-        self.player.check_cross_checkpoint(self.checkpoints)
-
-        if not NOCLIP and self.player.collide_with_walls(self.walls):
-            self.player.kill()
-            self.create_checkpoints()
-            self.spawn_player()
-
-        if self.player.check_cross_starting_line() \
-                and (self.player.points % 20 == 0) \
-                and (self.player.points > (20*self.player.laps)):
-            self.player.laps += 1
-            self.create_checkpoints()
 
     def show_start_screen(self):
         pass
@@ -258,11 +408,14 @@ class Game:
 #     def update(self):
 #         self.rect.x, self.rect.y = pg.mouse.get_pos()
 
+def start_game():
+    game = Game()
+    # game.show_start_screen()
+    while True:
+        game.new()
+        game.run()
+        # game.show_go_screen()
 
 # create game object
-game = Game()
-game.show_start_screen()
-while True:
-    game.new()
-    game.run()
-    game.show_go_screen()
+if __name__ == '__main__':
+    start_game()

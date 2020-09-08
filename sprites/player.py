@@ -7,7 +7,7 @@ import os
 # from cars import Cars
 
 class Player(pg.sprite.Sprite):
-    def __init__(self,game,x,y,angle):
+    def __init__(self,game,x,y,angle,velocity=[0,0]):
         self.groups = game.all_sprites, game.players
         pg.sprite.Sprite.__init__(self, self.groups)
         self.game = game
@@ -26,7 +26,7 @@ class Player(pg.sprite.Sprite):
         self.y = self.rect.y
 
         # valocity in m/s
-        self.v = np.array([0,0],dtype="float32") #26.8224
+        self.v = np.array(velocity,dtype="float32") #26.8224
         self.a = np.array([0,0],dtype="float32")
 
         self.rect.center = (x,y) #pixels
@@ -61,7 +61,9 @@ class Player(pg.sprite.Sprite):
         # around 4.6 seconds
         self.brake_factor = 40.2
 
-        # self.speed_limit = 273 #m/s
+        #calculates the car's max speed based on internal friction and air resistance
+        self.speed_limit = np.sqrt((self.mass*(self.base_a)-(self.coef_fric*self.grav)) \
+                            / (0.5*DENSITY_OF_AIR*self.area*self.drag_coef)) #m/s
 
         # self.ss = Spriesheet("sprites/REDCAR/CAR.png")
         # self.main_images = self.ss.load_strip((0,0,32))
@@ -72,6 +74,11 @@ class Player(pg.sprite.Sprite):
         self.accel = 0        
         self.turn = 0
         self.brake = False
+
+        #rays traved from the centre of the car to the wall in three directions
+        self.num_rays = 5
+        self.ray_length = [0 for _ in range(self.num_rays)]
+        self.ray_lines = [None for _ in range(self.num_rays)]
 
     def move(self,dt):
         #moves the car
@@ -127,7 +134,7 @@ class Player(pg.sprite.Sprite):
         # #print('\n',"x velocity: ",round(self.v[0],4))
         #if the car is going slow enough, set v to 0
         #print("mag velocity: ",abs(mag_v))
-        if mag_v < 0.07:
+        if mag_v < 0.07 and is_car_moving:
             # self.v[0], self.v[1] = (0,0)
             mag_v = 0
             # end = time.time()
@@ -160,8 +167,9 @@ class Player(pg.sprite.Sprite):
         #turns the wheel in the direction the player chooses
         else:
             self.wheel_angle += self.turn * amount_turned
-        # if not self.turn: #############
-        #     self.wheel_angle = 0 ##############
+        # if self.game.AI_ACTIVE:
+        #     if not self.turn: #############
+        #         self.wheel_angle = 0 ##############
         #print("turn: ",self.turn)
         #print('wheel angle: ',self.wheel_angle)
 
@@ -252,17 +260,14 @@ class Player(pg.sprite.Sprite):
         Obtains the length of each of the rays which will be optimized in the neural network.
         Obtains the start and end x and y values to be used for drawing the rays for debugging.
         """
-        rays = [self.get_ray_line(-self.angle + item) for item in [-45,0,45]]
-        self.rays_length = [0,0,0]
-        self.ray_lines = [None,None,None]
+        rays = [self.get_ray_line(-self.angle + item) for item in [-80,-30,0,30,80]]
+        self.ray_length = [0 for _ in range(self.num_rays)]
+        self.ray_lines = [None for _ in range(self.num_rays)]
 
         for i,ray in enumerate(rays):
             start_x, start_y = self.rect.center
             x,y = self.rect.center
-            while (0<=x<WIDTH) and (0<=y<HEIGHT):
-                #increases or decreases the x value depending on which direction the ray is going
-                x += ray[0] 
-                y -= ray[1] 
+            while (0<=x<WIDTH-10) and (0<=y<HEIGHT-10):
                 # print(x,y,self.game.screen.get_at((int(x),int(y))))
                 try:
                     point_colour = self.game.screen.get_at((int(x),int(y)))
@@ -272,10 +277,14 @@ class Player(pg.sprite.Sprite):
                 # print(x,y,point_colour)
                 #makes it so there needs to be whitespace before the wall
                 if point_colour == (1,1,1,255):
-                    self.rays_length[i] = np.linalg.norm([(x-start_x),(y-start_y)])
+                    self.ray_length[i] = np.sqrt((x-start_x)**2 + (y-start_y)**2) * SCALE
                     self.ray_lines[i] = ((start_x,start_y),(x,y))
                     break
                 # point_colour_0 = point_colour_f
+
+                #increases or decreases the x value depending on which direction the ray is going
+                x += ray[0] /2
+                y -= ray[1] /2
                 
 
 
@@ -292,22 +301,28 @@ class Player(pg.sprite.Sprite):
         #make a smaller hit box so that the car does not clip corners
         sml_rect = pg.Rect(self.rect.centerx-8,self.rect.centery-8,16,16)
         if WIDTH < self.rect.x < 0 or HEIGHT < self.rect.y < 0:
-            True
+            return True
         for wall in walls:
             if pg.Rect.colliderect(sml_rect,wall.rect):
                 return True
 
-    def check_cross_checkpoint(self, checkpoints):
+    def check_cross_checkpoint(self):
         """
         returns a checkpoint if the car crosses one
         """        
-        for checkpoint in checkpoints:
+        for checkpoint in self.game.checkpoints:
             if pg.sprite.collide_rect(self,checkpoint):
                 checkpoint.kill()
                 self.points += 1     
 
     def check_cross_starting_line(self):
-        return pg.sprite.collide_rect(self,self.game.starting_line)  
+        if pg.sprite.collide_rect(self,self.game.starting_line) \
+                and len(self.game.checkpoints) == 0:
+
+            for checkpoint in self.game.checkpoints:
+                checkpoint.kill()
+            self.laps += 1
+            self.game.create_checkpoints()
 
     def get_angle(self,v):
         # #print(v)

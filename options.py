@@ -11,6 +11,7 @@ TESTING = 0
 GRID = 0
 RAYS = 1
 NOCLIP = 0
+SAVEDATA = 0
 
 #colours
 BLACK = (0,0,0)
