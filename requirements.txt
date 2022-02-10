@@ -4,4 +4,4 @@ tf==1.0.0
 gym==0.17.2
 keras==2.4.3
 rl==3.0
-tensorflow==2.4.2
+tensorflow==2.5.3
