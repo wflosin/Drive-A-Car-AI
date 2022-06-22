@@ -1,5 +1,5 @@
 pygame==1.9.5
-numpy==1.16.2
+numpy==1.22.0
 tf==1.0.0
 gym==0.17.2
 keras==2.4.3
